@@ -8,7 +8,12 @@ import {
   ElementTypes
 } from '../ast'
 import { createCompilerError, ErrorCodes } from '../errors'
-import { isMemberExpression, isSimpleIdentifier, hasScopeRef } from '../utils'
+import {
+  isMemberExpression,
+  isSimpleIdentifier,
+  hasScopeRef,
+  isStaticExp
+} from '../utils'
 
 export const transformModel: DirectiveTransform = (dir, node, context) => {
   const { exp, arg } = dir
@@ -21,6 +26,7 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
 
   const expString =
     exp.type === NodeTypes.SIMPLE_EXPRESSION ? exp.content : exp.loc.source
+
   if (!isMemberExpression(expString)) {
     context.onError(
       createCompilerError(ErrorCodes.X_V_MODEL_MALFORMED_EXPRESSION, exp.loc)
@@ -42,14 +48,10 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
 
   const propName = arg ? arg : createSimpleExpression('modelValue', true)
   const eventName = arg
-    ? arg.type === NodeTypes.SIMPLE_EXPRESSION && arg.isStatic
-      ? createSimpleExpression('onUpdate:' + arg.content, true)
-      : createCompoundExpression([
-          createSimpleExpression('onUpdate:', true),
-          '+',
-          ...(arg.type === NodeTypes.SIMPLE_EXPRESSION ? [arg] : arg.children)
-        ])
-    : createSimpleExpression('onUpdate:modelValue', true)
+    ? isStaticExp(arg)
+      ? `onUpdate:${arg.content}`
+      : createCompoundExpression(['"onUpdate:" + ', arg])
+    : `onUpdate:modelValue`
 
   const props = [
     // modelValue: foo
@@ -57,11 +59,7 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
     // "onUpdate:modelValue": $event => (foo = $event)
     createObjectProperty(
       eventName,
-      createCompoundExpression([
-        `$event => (`,
-        ...(exp.type === NodeTypes.SIMPLE_EXPRESSION ? [exp] : exp.children),
-        ` = $event)`
-      ])
+      createCompoundExpression([`$event => (`, exp, ` = $event)`])
     )
   ]
 
@@ -69,6 +67,7 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
   if (
     !__BROWSER__ &&
     context.prefixIdentifiers &&
+    context.cacheHandlers &&
     !hasScopeRef(exp, context.identifiers)
   ) {
     props[1].value = context.cache(props[1].value)
@@ -79,9 +78,14 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
     const modifiers = dir.modifiers
       .map(m => (isSimpleIdentifier(m) ? m : JSON.stringify(m)) + `: true`)
       .join(`, `)
+    const modifiersKey = arg
+      ? isStaticExp(arg)
+        ? `${arg.content}Modifiers`
+        : createCompoundExpression([arg, ' + "Modifiers"'])
+      : `modelModifiers`
     props.push(
       createObjectProperty(
-        `modelModifiers`,
+        modifiersKey,
         createSimpleExpression(`{ ${modifiers} }`, false, dir.loc, true)
       )
     )
@@ -91,5 +95,5 @@ export const transformModel: DirectiveTransform = (dir, node, context) => {
 }
 
 function createTransformProps(props: Property[] = []) {
-  return { props, needRuntime: false }
+  return { props }
 }
